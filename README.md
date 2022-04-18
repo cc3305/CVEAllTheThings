@@ -4,11 +4,11 @@ A collection of CVE exploit scripts written in Python.
 
 ## FAQ
 
-Q: Why?
+Q: Why?  
 A: First of all, fun. 
    Secondly, im annoyed of needing to spend valuable time finding and potentially fixing old CVE POCs, so i just made my own repo.
 
-Q: How can i contribute?
+Q: How can i contribute?  
 A: Just make a pull request and i will review it, but be sure to first check out the sample script, to get a feeling how a script should be structured.
 
 ## Additional Info
