@@ -1,6 +1,6 @@
 # CVE-XXXX-yyyy - Alternate Title1
 
-> CVE description - reference
+> CVE description
 
 ## Summary of the CVE
 
