@@ -13,7 +13,7 @@ summary here
 
 ## Anomalies
 
-Anomalies in the script, e.g. affecte service needs this enabled, downloads c code, ...
+Anomalies in the script, e.g. affected service needs this enabled, downloads c code, ...
 
 ## References
 
