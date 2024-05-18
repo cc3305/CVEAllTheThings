@@ -12,6 +12,6 @@ Q: How can I contribute?
 A: Just make a pull request and I will review it, but be sure to first check out the sample script, to get a feeling of how a script should be structured.
 
 ## Additional Info
-- Most scripts are written in python and have the same structure, but some CVEs require a different approach (e.g. if we need compiled C code, etc.)
+- Most scripts are written in python and have the same structure, but some CVEs require a different approach (e.g. if the exploit needs compiled C code, etc.)
 - Inspired by the [trickest/cve](https://github.com/trickest/cve) repo :)
 - Credit is always given in the README of the exploit and/or in the code
