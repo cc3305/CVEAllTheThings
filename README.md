@@ -11,6 +11,9 @@ A: First of all, fun.
 Q: How can I contribute?  
 A: Just make a pull request and I will review it, but be sure to first check out the sample script, to get a feeling of how a script should be structured.
 
+Q: How do I use this?
+A: You can either clone just the repo for the CVE you need or you can clone all of them like this: `git clone https://github.com/cc3305/CVEAllTheThings --recursive --shallow-submodules`
+
 ## Additional Info
 - Most scripts are written in python and have the same structure, but some CVEs require a different approach (e.g. if the exploit needs compiled C code, etc.)
 - Inspired by the [trickest/cve](https://github.com/trickest/cve) repo :)
