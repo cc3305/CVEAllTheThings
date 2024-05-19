@@ -4,3 +4,6 @@
 [submodule "_template_script"]
 	path = _template_script
 	url = https://github.com/cc3305/_template_script.git
+[submodule "2021/CVE-2021-22205"]
+	path = 2021/CVE-2021-22205
+	url = https://github.com/cc3305/CVE-2021-22205
