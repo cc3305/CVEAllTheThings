@@ -9,7 +9,7 @@ A: First of all, fun.
    Secondly, I'm annoyed about needing to spend valuable time finding and potentially fixing old CVE POCs, so I just made my own repo.
 
 Q: How can I contribute?  
-A: Just make a pull request and I will review it, but be sure to first check out the sample script, to get a feeling of how a script should be structured.
+A: I have yet to figure that out (see issues)
 
 Q: How do I use this?
 A: You can either clone just the repo for the CVE you need or you can clone all of them like this: `git clone https://github.com/cc3305/CVEAllTheThings --recursive --shallow-submodules`
