@@ -8,3 +8,7 @@
 	path = 2021/CVE-2021-22205
 	url = https://github.com/cc3305/CVE-2021-22205.git
 	branch = main
+[submodule "2021/CVE-2021-22204"]
+	path = 2021/CVE-2021-22204
+	url = https://github.com/cc3305/CVE-2021-22204
+	branch = main
