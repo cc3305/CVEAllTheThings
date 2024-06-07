@@ -11,7 +11,7 @@ A: First of all, fun.
 Q: How can I contribute?  
 A: Have not yet thought about it, just open a issue in this repo and I will think of something
 
-Q: How do I use this?
+Q: How do I use this?  
 A: You can either clone just the repo for the CVE you need or you can clone all of them like this: `git clone https://github.com/cc3305/CVEAllTheThings --recursive --shallow-submodules`
 
 ## Additional Info
