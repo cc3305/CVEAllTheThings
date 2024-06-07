@@ -12,3 +12,11 @@
 	path = 2021/CVE-2021-22204
 	url = https://github.com/cc3305/CVE-2021-22204
 	branch = main
+[submodule "2022/CVE-2022-29464"]
+	path = 2022/CVE-2022-29464
+	url = https://github.com/cc3305/CVE-2022-29464
+	branch = main
+[submodule "2022/CVE-2022-26134"]
+	path = 2022/CVE-2022-26134
+	url = https://github.com/cc3305/CVE-2022-26134
+	branch = main
