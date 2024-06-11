@@ -14,11 +14,26 @@ TEMPLATE_SCRIPT = TEMPLATE_PATH / "CVE-XXXX-yyyy.py"
 TEMPLATE_README = TEMPLATE_PATH / "README.md"
 TEMPLATE_REQUIREMENTS = TEMPLATE_PATH / "requirements.txt"
 
+_RE_COMBINE_WHITESPACE = re.compile(r"\s+")
+_RE_VERSION_MATCHER = re.compile(r".* \((>=|<=|=<|>|=|<)\) (\S+) .* \((>=|<=|=<|>|=|<)\) (\S+)")
+
+
 @dataclass
 class VersionRange:
+    product_name: str
     max_version: str
+    max_including: bool
     min_version: str
-    exclusions: list[str]
+    min_including: bool
+    exclusions: Optional[list[str]]
+    single: bool = False
+
+    def __str__(self) -> str:
+        max_version_symbol = "<" + ("=" if self.max_including else "")
+        min_version_symbol = ">" + ("=" if self.min_including else "")
+        if not self.single:
+            return f"{self.product_name} {min_version_symbol} {self.min_version} {max_version_symbol} {self.max_version}"
+        return f"{self.product_name} {self.min_version}" 
 
 @dataclass
 class CVEDetails:
@@ -112,55 +127,65 @@ def check_files() -> bool:
             return False
     return True
 
-
-def get_cve_details():
-    # These should not be None, but just make sure (and make the linter shut up)
-    assert args is not None, "Args are None while parsing cve details"
-    assert args.IDENTIFIER is not None, "CVE Identifier is None while parsing cve details"
-
-    # Need user agent so we dont get blocked by cf
-    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0"}
-    url = f"https://www.cvedetails.com/cve/{args.IDENTIFIER}/"
-    resp = requests.get(url, headers=headers)
-    # 429 means blocked by cf
-    if resp.status_code == 429:
-        log_error(f"Could not parse cve details, blocked")
-        return False
-    if resp.status_code != 200:
-        log_error(f"Could not parse cve details, cant reach website?")
-        return False
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-    # Check if the cve exists, if not there is a element with the class "alert alert-secondary my-4" which has the error message
-    potential_error_message_container = soup.find("div", {"class": "alert alert-secondary my-4"})
-    if potential_error_message_container is not None:
-        # Error message is the first bold text
-        potential_error_message = potential_error_message_container.findChild("b", recursive=False)
-        error = "Unkown"
-        if potential_error_message is not None:
-            error = potential_error_message.text
-        log_error(f"Could not parse cve details: {error}")
-        return False
-
-    # Check if the CVE identifier can be found on the page
-    identifier_element = soup.find("div", {"id": "cvedetails-title-div"})
-    if identifier_element is None:
-        log_error("Could not parse title on cve details")
-        return False
-    identifier = identifier_element.findChild("a")
-    if identifier is None:
-        log_error("Could not parse identifier of cve on cve details")
-        return False
-
-    details = CVEDetails(identifier.text, None, [], [], [])
-    
-    # Try parse the summary
-    summary = soup.find("div", {"id": "cvedetailssummary"})
-    if summary is None:
-        log_debug("Could not parse summary from cve details")
+def parse_versions(soup) -> list[VersionRange]:
+    affected_versions = []
+    affected_version_element = soup.find("ul", {"id": "affectedCPEsList"})
+    if affected_version_element is None:
+        log_debug(f"Could not parse affected versions")
     else:
-        details.summary = summary.text
+        all_lis = affected_version_element.findAll("li")
+        for li in all_lis:
+            product_name_element = li.find("div")
+            product_name_parts = product_name_element.text.split("Version")
+            # This is pretty bad but oh well
+            product_name = product_name_parts[0]
+            # Normalize the product name
+            product_name = product_name.replace("»", "")
+            product_name = _RE_COMBINE_WHITESPACE.sub(" ", product_name).strip()
 
+            if len(product_name_parts) < 2:
+                log_debug(f"No version for {product_name}")
+                continue
+
+            # If there is only one version listed we need to split by "Version" if there are multiple its "Versions"
+            product_version = product_name_parts[1]
+            if "Versions" in product_name_element.text:
+                product_version = product_name_element.text.split("Versions")[1]
+            else:
+                # Single version, string looks like this ": VERSION"
+                version = product_version[2:]
+                affected_versions.append(VersionRange(product_name, version, True, version, True, [], True))
+                continue
+            # Version looks like this "from including (>=) 7.16.0 and  before (<) 7.16.4"
+            # Dont really care about the text so just keep everything in () and the version numbers
+            product_version = product_version.strip()
+            version_matches = _RE_VERSION_MATCHER.match(product_version)
+            if version_matches is None:
+                print(f"Could not parse version {product_name} {product_version}")
+                continue
+            if len(version_matches.groups()) < 4:
+                print(f"Could not find all version parts for {product_name} {product_version}")
+                continue
+            # Find out which version is the min and max and which of them are inclusive
+            operator_one = version_matches.groups()[0]
+            version_one = version_matches.groups()[1]
+            operator_two = version_matches.groups()[2]
+            version_two = version_matches.groups()[3]
+            min = max = ""
+            min_inclusive = max_inclusive = False
+            for operator, version in zip([operator_one, operator_two], [version_one, version_two]):
+                if ">" in operator:
+                    min = version
+                    min_inclusive = "=" in operator
+                if "<" in operator:
+                    max = version
+                    max_inclusive = "=" in operator
+
+            vr = VersionRange(product_name, max, max_inclusive, min, min_inclusive, [])
+            affected_versions.append(vr)
+    return affected_versions
+
+def parse_scores(soup) -> list[float]:
     # Parse the scores
     score_table_element = soup.find("table", {"class": "table table-borderless"})
     scores = []
@@ -179,7 +204,9 @@ def get_cve_details():
             else:
                 log_debug(f"Could not parse score '{score}' to float")
 
-    details.scores = scores
+    return scores
+
+def parse_references(soup) -> list:
 
     cve_cards_elements = soup.findAll("div", {"class": "cved-card"})
     references_cve_card_element = None
@@ -197,7 +224,80 @@ def get_cve_details():
             log_debug(f"Could not find link for li {li}")
             continue
         links.append(link.get("href")) 
-    details.references = links
+    return links
+
+def parse_summary(soup) -> str:
+    # Try parse the summary
+    summary = soup.find("div", {"id": "cvedetailssummary"})
+    if summary is None:
+        log_debug("Could not parse summary from cve details")
+        return ""
+    return summary.text
+
+def parse_ident(soup) -> str:
+    # Check if the CVE identifier can be found on the page
+    identifier_element = soup.find("div", {"id": "cvedetails-title-div"})
+    if identifier_element is None:
+        log_error("Could not parse title on cve details")
+        return ""
+    identifier = identifier_element.findChild("a")
+    if identifier is None:
+        log_error("Could not parse identifier of cve on cve details")
+        return ""
+    return identifier.text
+
+def parse_error_message(soup) -> str:
+    # Check if the cve exists, if not there is a element with the class "alert alert-secondary my-4" which has the error message
+    potential_error_message_container = soup.find("div", {"class": "alert alert-secondary my-4"})
+    if potential_error_message_container is not None:
+        # Error message is the first bold text
+        potential_error_message = potential_error_message_container.findChild("b", recursive=False)
+        error = "Unkown"
+        if potential_error_message is not None:
+            error = potential_error_message.text
+        return error
+    return ""
+
+
+def get_cve_details() -> tuple[bool, CVEDetails | None]:
+    # These should not be None, but just make sure (and make the linter shut up)
+    assert args is not None, "Args are None while parsing cve details"
+    assert args.IDENTIFIER is not None, "CVE Identifier is None while parsing cve details"
+
+    # Need user agent so we dont get blocked by cf
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0"}
+    url = f"https://www.cvedetails.com/cve/{args.IDENTIFIER}/"
+    resp = requests.get(url, headers=headers)
+    # 429 means blocked by cf
+    if resp.status_code == 429:
+        log_error(f"Could not parse cve details, blocked")
+        return False, None
+    if resp.status_code != 200:
+        log_error(f"Could not parse cve details, cant reach website?")
+        return False, None
+
+    return parse_cve_details(resp)
+
+def parse_cve_details(response: requests.Response) -> tuple[bool, CVEDetails | None]:
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    error = parse_error_message(soup)
+    if error != "":
+        log_error(f"Could not parse cve details: {error}")
+        return False, None
+
+    identifier = parse_ident(soup)
+    if identifier == "":
+        return False, None
+
+    details = CVEDetails(identifier, None, [], [], [])
+
+    details.summary = parse_summary(soup)
+    details.references = parse_references(soup) 
+    details.scores = parse_scores(soup)
+    details.affected_version = parse_versions(soup)
+
+    return True, details
 
 
 
@@ -210,7 +310,13 @@ def main():
     if not path_ok:
         log_fatal(f"File integrity")
         exit(1)
-    details = get_cve_details()
+    details_ok, details = get_cve_details()
+    if not details_ok:
+        log_fatal(f"Could not parse details")
+        exit(1)
+    assert details is not None, "Details None even though parsing succeded"
+    for af in details.affected_version:
+        print(af)
 
 if __name__ == "__main__":
     main()
