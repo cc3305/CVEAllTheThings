@@ -199,9 +199,6 @@ def get_cve_details():
         links.append(link.get("href")) 
     details.references = links
 
-    for ref in details.references:
-        print(ref)
-
 
 
 def main():
