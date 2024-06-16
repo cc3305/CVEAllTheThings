@@ -46,11 +46,23 @@ class CVEDetails:
     affected_version: list[VersionRange]
 
     def avg_score(self) -> str:
+        """
+        Returns the average scores of the scores
+
+        Returns:
+            str: The average or "n/a"
+        """
         if len(self.scores) < 1:
             return "n/a"
         return str(sum(self.scores) / len(self.scores))
 
     def highest_score(self) -> str:
+        """
+        Returns the highest scores of the scores
+
+        Returns:
+            str: The highest score or "n/a"
+        """
         if len(self.scores) < 1:
             return "n/a"
         return str(max(self.scores))
@@ -104,6 +116,15 @@ def parse_args() -> tuple[bool, argparse.Namespace]:
     return True, result
 
 def is_valid_cve_identifier(ident: str):
+    """
+    Check if the identifier is valid
+
+    Arguments:
+        ident(str): The identifier
+
+    Returns:
+        bool: True if the identifier is valid.
+    """
     cve_pattern = r"CVE-\d{4}-\d{4,}"
     return not re.fullmatch(cve_pattern, ident) is None
 
@@ -129,6 +150,7 @@ def is_float(element: any) -> bool:
 def check_files() -> bool:
     """
     Checks the file integrity
+
     Returns:
         True if all files exist, False otherwise
     """
@@ -140,6 +162,15 @@ def check_files() -> bool:
     return True
 
 def parse_versions(soup) -> list[VersionRange]:
+    """
+    Parse the affected versions by the CVE
+
+    Arguments:
+        soup: The soup of the cvedetails page
+
+    Returns:
+        list[VersionRange]: The list of version ranges
+    """
     affected_versions = []
     affected_version_element = soup.find("ul", {"id": "affectedCPEsList"})
     if affected_version_element is None:
@@ -199,6 +230,15 @@ def parse_versions(soup) -> list[VersionRange]:
     return affected_versions
 
 def parse_scores(soup) -> list[float]:
+    """
+    Parse the CVE scores
+
+    Arguments:
+        soup: The soup of the cvedetails page
+
+    Returns:
+        list[float]: A list of floats that represents the scores
+    """
     # Parse the scores
     score_table_element = soup.find("table", {"class": "table table-borderless"})
     scores = []
@@ -220,6 +260,15 @@ def parse_scores(soup) -> list[float]:
     return scores
 
 def parse_references(soup) -> list:
+    """
+    Parse the CVE references
+
+    Arguments:
+        soup: The soup of the cvedetails page
+
+    Returns:
+        list: List of references
+    """
     cve_cards_elements = soup.findAll("div", {"class": "cved-card"})
     references_cve_card_element = None
     for cve_card in cve_cards_elements:
@@ -239,6 +288,15 @@ def parse_references(soup) -> list:
     return links
 
 def parse_summary(soup) -> str:
+    """
+    Parse the CVE summary
+
+    Arguments:
+        soup: The soup of the cvedetails page
+
+    Returns:
+        str: The summary or "" if there is none
+    """
     # Try parse the summary
     summary = soup.find("div", {"id": "cvedetailssummary"})
     if summary is None:
@@ -247,6 +305,15 @@ def parse_summary(soup) -> str:
     return summary.text
 
 def parse_ident(soup) -> str:
+    """
+    Parse the CVE-XXXX-yyyy identifier
+
+    Arguments:
+        soup: The soup of the cvedetails page
+
+    Returns:
+        str: The identifier or "" if none was found
+    """
     # Check if the CVE identifier can be found on the page
     identifier_element = soup.find("div", {"id": "cvedetails-title-div"})
     if identifier_element is None:
@@ -259,6 +326,15 @@ def parse_ident(soup) -> str:
     return identifier.text
 
 def parse_error_message(soup) -> str:
+    """
+    Parses a error message that can occurr on the cvedetails page
+
+    Arguments:
+        soup: BS4 Soup
+
+    Returns:
+        str: The error or "" if there is none
+    """
     # Check if the cve exists, if not there is a element with the class "alert alert-secondary my-4" which has the error message
     potential_error_message_container = soup.find("div", {"class": "alert alert-secondary my-4"})
     if potential_error_message_container is not None:
@@ -272,6 +348,11 @@ def parse_error_message(soup) -> str:
 
 
 def get_cve_details() -> tuple[bool, CVEDetails | None]:
+    """
+    Parses CVE Details from https://cvedetails.com/
+    Returns:
+        tuple[bool, CVEDetails]: True if everything went ok and the parsed CVEDetails
+    """
     # These should not be None, but just make sure (and make the linter shut up)
     assert args is not None, "Args are None while parsing cve details"
     assert args.IDENTIFIER is not None, "CVE Identifier is None while parsing cve details"
@@ -291,6 +372,15 @@ def get_cve_details() -> tuple[bool, CVEDetails | None]:
     return parse_cve_details(resp)
 
 def parse_cve_details(response: requests.Response) -> tuple[bool, CVEDetails | None]:
+    """
+    Parse all the cve details from https://cvedetails.com
+
+    Arguments:
+        response(requests.Response): The response of the request to https://cvedetails.com
+
+    Returns:
+        tuple[bool, CVEDetails]: True if everything was successful and the CVEDetails
+    """
     soup = BeautifulSoup(response.text, "html.parser")
 
     error = parse_error_message(soup)
@@ -312,6 +402,15 @@ def parse_cve_details(response: requests.Response) -> tuple[bool, CVEDetails | N
     return True, details
 
 def parse_year(identifier: str) -> str:
+    """
+    Parse the year from a CVE-XXXX-yyyy identifier
+
+    Arguments:
+        identifier(str): the identifier
+
+    Returns:
+        str: the year or "" if it couldnt be parsed
+    """
     cve_pattern = r"CVE-(\d{4})-\d{4,}"
     matches = re.match(cve_pattern, identifier)
     if matches is None:
@@ -320,6 +419,15 @@ def parse_year(identifier: str) -> str:
     return matches.groups()[0]
 
 def construct_template(details: CVEDetails) -> tuple[bool, Path | None]:
+    """
+    Construct the template of the CVE
+
+    Arguments:
+        details(CVEDetails): The details for the template
+
+    Returns:
+        tuple[bool, Path]: True if everything went ok and the Path to the folder
+    """
     year = parse_year(details.identifier)
     if year == "":
         return False, None
@@ -338,12 +446,30 @@ def construct_template(details: CVEDetails) -> tuple[bool, Path | None]:
     return write_script_ok and write_readme_ok and write_req_ok, folder_path
 
 def affected_versions_to_string(details: CVEDetails) -> str | None:
+    """
+    Convert the affected versions to a string
+
+    Arguments:
+        details(CVEDetails): The details
+
+    Returns:
+        str: The affected versions as a string
+    """
     formatted_string = ""
     for version in details.affected_version:
         formatted_string += f"- {str(version)}\n"
     return formatted_string.rstrip() if formatted_string != "" else None
 
 def references_to_string(details: CVEDetails) -> str | None:
+    """
+    Convert the references to a string
+
+    Arguments:
+        details(CVEDetails): The details
+
+    Returns:
+        str: The references as a string
+    """
     formatted_string = ""
     formatted_string += f"- [CVE-details - CVSS Score {details.highest_score()}](https://www.cvedetails.com/cve/{details.identifier})"
     for reference in details.references:
@@ -351,6 +477,15 @@ def references_to_string(details: CVEDetails) -> str | None:
     return formatted_string if formatted_string != "" else None
 
 def write_readme(new_readme_path: Path, details: CVEDetails) -> bool:
+    """
+    Write the readme
+
+    Arguments:
+        details(CVEDetails): The details
+
+    Returns:
+        bool: True if everything was successful
+    """
     content = TEMPLATE_README.read_text()
 
     summary = details.summary or "Unable to parse CVE summary"
@@ -370,16 +505,37 @@ def write_readme(new_readme_path: Path, details: CVEDetails) -> bool:
     return True
 
 def write_requirements(new_req_path: Path, _: CVEDetails) -> bool:
+    """
+    Write the requirements
+
+    Arguments:
+        details(CVEDetails): The details
+
+    Returns:
+        bool: True if everything was successful
+    """
     new_req_path.write_text(TEMPLATE_REQUIREMENTS.read_text())
     return True
 
 def write_script(new_script_path: Path, details: CVEDetails) -> bool:
+    """
+    Write the script
+
+    Arguments:
+        details(CVEDetails): The details
+
+    Returns:
+        bool: True if everything was successful
+    """
     content = TEMPLATE_SCRIPT.read_text()
     content = content.replace("CVE-XXXX-yyyy", details.identifier)
     new_script_path.write_text(content)
     return True
 
 def main():
+    """
+    Main function
+    """
     global args
     args_ok, args = parse_args()
     if not args_ok:
