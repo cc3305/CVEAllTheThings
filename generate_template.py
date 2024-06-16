@@ -31,6 +31,8 @@ class VersionRange:
     def __str__(self) -> str:
         max_version_symbol = "<" + ("=" if self.max_including else "")
         min_version_symbol = ">" + ("=" if self.min_including else "")
+        if self.min_version == "" and self.max_version == "":
+            return f"{self.product_name}"
         if not self.single:
             return f"{self.product_name} {min_version_symbol} {self.min_version} {max_version_symbol} {self.max_version}"
         return f"{self.product_name} {self.min_version}" 
@@ -42,6 +44,16 @@ class CVEDetails:
     scores: list[float]
     references: list[str]
     affected_version: list[VersionRange]
+
+    def avg_score(self) -> str:
+        if len(self.scores) < 1:
+            return "n/a"
+        return str(sum(self.scores) / len(self.scores))
+
+    def highest_score(self) -> str:
+        if len(self.scores) < 1:
+            return "n/a"
+        return str(max(self.scores))
 
 def log_error(msg: str):
     """
@@ -145,6 +157,7 @@ def parse_versions(soup) -> list[VersionRange]:
 
             if len(product_name_parts) < 2:
                 log_debug(f"No version for {product_name}")
+                affected_versions.append(VersionRange(product_name, "", False, "", False, [], False))
                 continue
 
             # If there is only one version listed we need to split by "Version" if there are multiple its "Versions"
@@ -207,7 +220,6 @@ def parse_scores(soup) -> list[float]:
     return scores
 
 def parse_references(soup) -> list:
-
     cve_cards_elements = soup.findAll("div", {"class": "cved-card"})
     references_cve_card_element = None
     for cve_card in cve_cards_elements:
@@ -299,7 +311,73 @@ def parse_cve_details(response: requests.Response) -> tuple[bool, CVEDetails | N
 
     return True, details
 
+def parse_year(identifier: str) -> str:
+    cve_pattern = r"CVE-(\d{4})-\d{4,}"
+    matches = re.match(cve_pattern, identifier)
+    if matches is None:
+        log_fatal(f"Could not parse year from identifier {identifier}")
+        return ""
+    return matches.groups()[0]
 
+def construct_template(details: CVEDetails) -> tuple[bool, Path | None]:
+    year = parse_year(details.identifier)
+    if year == "":
+        return False, None
+    # Create the folder
+    folder_path = Path("./") / year / details.identifier
+    if folder_path.is_dir():
+        log_fatal(f"Folder {folder_path} already exists")
+        return False, None
+    folder_path.mkdir(parents=True)
+    script_path = folder_path / f"{details.identifier}.py"
+    readme_path = folder_path / f"README.md"
+    requirements_path = folder_path / f"requirements.txt"
+    write_script_ok = write_script(script_path, details)
+    write_readme_ok = write_readme(readme_path, details)
+    write_req_ok = write_requirements(requirements_path, details)
+    return write_script_ok and write_readme_ok and write_req_ok, folder_path
+
+def affected_versions_to_string(details: CVEDetails) -> str | None:
+    formatted_string = ""
+    for version in details.affected_version:
+        formatted_string += f"- {str(version)}\n"
+    return formatted_string.rstrip() if formatted_string != "" else None
+
+def references_to_string(details: CVEDetails) -> str | None:
+    formatted_string = ""
+    formatted_string += f"- [CVE-details - CVSS Score {details.highest_score()}](https://www.cvedetails.com/cve/{details.identifier})"
+    for reference in details.references:
+        pass
+    return formatted_string if formatted_string != "" else None
+
+def write_readme(new_readme_path: Path, details: CVEDetails) -> bool:
+    content = TEMPLATE_README.read_text()
+
+    summary = details.summary or "Unable to parse CVE summary"
+    content = content.replace("summary here", summary)
+
+    affected_version = affected_versions_to_string(details) or "Unable to parse affected versions"
+    affected_versions_template_string = "- Version < 1.10\n- Version 1.2 - 1.20"
+    content = content.replace(affected_versions_template_string, affected_version)
+
+    references = references_to_string(details) or "Unable to parse references????"
+    references_template_string = "- [Blog title - Author, Date](https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/_template_vuln/README.md)\n- [CVE-details - CVSS Score](https://www.cvedetails.com/cve/CVE-XXXX-yyyy/)"
+    content = content.replace(references_template_string, references)
+
+    content = content.replace("CVE-XXXX-yyyy", details.identifier)
+
+    new_readme_path.write_text(content)
+    return True
+
+def write_requirements(new_req_path: Path, _: CVEDetails) -> bool:
+    new_req_path.write_text(TEMPLATE_REQUIREMENTS.read_text())
+    return True
+
+def write_script(new_script_path: Path, details: CVEDetails) -> bool:
+    content = TEMPLATE_SCRIPT.read_text()
+    content = content.replace("CVE-XXXX-yyyy", details.identifier)
+    new_script_path.write_text(content)
+    return True
 
 def main():
     global args
@@ -315,8 +393,8 @@ def main():
         log_fatal(f"Could not parse details")
         exit(1)
     assert details is not None, "Details None even though parsing succeded"
-    for af in details.affected_version:
-        print(af)
+    construct_template(details)
+    
 
 if __name__ == "__main__":
     main()
