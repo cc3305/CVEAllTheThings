@@ -205,10 +205,10 @@ def parse_versions(soup) -> list[VersionRange]:
             product_version = product_version.strip()
             version_matches = _RE_VERSION_MATCHER.match(product_version)
             if version_matches is None:
-                print(f"Could not parse version {product_name} {product_version}")
+                log_debug(f"Could not parse version {product_name} {product_version}")
                 continue
             if len(version_matches.groups()) < 4:
-                print(f"Could not find all version parts for {product_name} {product_version}")
+                log_debug(f"Could not find all version parts for {product_name} {product_version}")
                 continue
             # Find out which version is the min and max and which of them are inclusive
             operator_one = version_matches.groups()[0]
@@ -549,7 +549,11 @@ def main():
         log_fatal(f"Could not parse details")
         exit(1)
     assert details is not None, "Details None even though parsing succeded"
-    construct_template(details)
+    success, path = construct_template(details)
+    if not success:
+        log_fatal(f"Could not create generate files")
+        return
+    log_info(f"Success! Saved under {path}")
     
 
 if __name__ == "__main__":
