@@ -1,27 +1,35 @@
 [submodule "2021/CVE-2021-3129"]
 	path = 2021/CVE-2021-3129
-	url = https://github.com/cc3305/CVE-2021-3129.git
+    url = https://github.com/cc3305/CVE-2021-3129.git
+    branch = main
+    ignore = dirty
 [submodule "_template_script"]
 	path = _template_script
 	url = https://github.com/cc3305/_template_script.git
 	branch = main
+    ignore = dirty
 [submodule "2021/CVE-2021-22205"]
 	path = 2021/CVE-2021-22205
 	url = https://github.com/cc3305/CVE-2021-22205.git
 	branch = main
+    ignore = dirty
 [submodule "2021/CVE-2021-22204"]
 	path = 2021/CVE-2021-22204
 	url = https://github.com/cc3305/CVE-2021-22204
 	branch = main
+    ignore = dirty
 [submodule "2022/CVE-2022-29464"]
 	path = 2022/CVE-2022-29464
 	url = https://github.com/cc3305/CVE-2022-29464
 	branch = main
+    ignore = dirty
 [submodule "2022/CVE-2022-26134"]
 	path = 2022/CVE-2022-26134
 	url = https://github.com/cc3305/CVE-2022-26134
 	branch = main
+    ignore = dirty
 [submodule "2022/CVE-2022-22947"]
 	path = 2022/CVE-2022-22947
 	url = https://github.com/cc3305/CVE-2022-22947
 	branch = main
+    ignore = dirty
