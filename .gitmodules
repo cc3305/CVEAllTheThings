@@ -33,3 +33,7 @@
 	url = https://github.com/cc3305/CVE-2022-22947
 	branch = main
     ignore = dirty
+[submodule "2023/CVE-2023-2825"]
+	path = 2023/CVE-2023-2825
+	url = https://github.com/cc3305/CVE-2023-2825
+	branch = main
