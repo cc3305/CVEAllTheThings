@@ -6,6 +6,8 @@ import requests
 import re
 from dataclasses import dataclass
 from bs4 import BeautifulSoup
+from sh import git
+import os
 
 args = None
 
@@ -13,6 +15,8 @@ TEMPLATE_PATH = Path("./_template_script/")
 TEMPLATE_SCRIPT = TEMPLATE_PATH / "CVE-XXXX-yyyy.py"
 TEMPLATE_README = TEMPLATE_PATH / "README.md"
 TEMPLATE_REQUIREMENTS = TEMPLATE_PATH / "requirements.txt"
+
+GITHUB_API_KEY_PATH = Path("../github_api_key.txt")
 
 _RE_COMBINE_WHITESPACE = re.compile(r"\s+")
 _RE_VERSION_MATCHER = re.compile(r".* \((>=|<=|=<|>|=|<)\) (\S+) .* \((>=|<=|=<|>|=|<)\) (\S+)")
@@ -532,6 +536,93 @@ def write_script(new_script_path: Path, details: CVEDetails) -> bool:
     new_script_path.write_text(content)
     return True
 
+def test_key(key: str) -> bool:
+    headers = {"Authorization": f"token {key}"}
+    resp = requests.get("https://api.github.com", headers=headers)
+    return resp.status_code == 200
+
+def load_github_apikey() -> tuple[bool, str]:
+    if not GITHUB_API_KEY_PATH.exists():
+        log_debug(f"No github api key provided in {GITHUB_API_KEY_PATH}, not initializing repo")
+        return False, ""
+    key = GITHUB_API_KEY_PATH.read_text().strip()
+    if key == "":
+        log_debug(f"Invalid github api key in file {GITHUB_API_KEY_PATH}, not initializing repo")
+        return False, ""
+
+    return True, key
+
+def create_github_repo(key: str, identifier: str) -> dict:
+    headers = {"Authorization": f"token {key}"}
+    data = {
+        "name": identifier,
+        "private": True,
+        "description": f"{identifier} exploit script",
+        "has_wiki": False,
+        "has_projects": False
+    }
+    resp = requests.post("https://api.github.com/user/repos", headers=headers, json=data)
+    error = ""
+    match resp.status_code:
+        case 201:
+            pass
+        case 302:
+            error = "Not modified"
+        case 400:
+            error = "Bad request"
+        case 401:
+            error = "Not authenticated"
+        case 403:
+            error = "Wrong permissions"
+        case 422:
+            error = "Validation failed or endpoint was spammed"
+
+    if error != "":
+        log_error(f"Something went wrong while creating the github repo: {error}")
+        return {}
+    resp_json = resp.json()
+    log_info(f"Created private repo {resp_json['html_url']}")
+    return resp_json
+
+def setup_git(path: Path) -> tuple[bool, str]:
+    # Load and check the github api key
+    key_ok, key = load_github_apikey()
+    if not key_ok:
+        return False, ""
+
+    key_valid = test_key(key)
+    if not key_valid:
+        log_fatal("Github api key is invalid.")
+        return False, ""
+
+    # Create a git repo locally
+    git_path = path / ".git"
+    git_path.mkdir()
+
+    os.chdir(path)
+
+    # Init the git repo
+    path_git = git.bake()
+    path_git.init()
+
+    # Create a new github repo
+    resp_json = create_github_repo(key, path.name)
+
+    # Add all the files and push
+    # git remote add origin git@github.com:cc3305/CVE-XXXX-yyyy.git
+    path_git.remote.add("origin", resp_json["ssh_url"])
+    # git branch -M main
+    path_git.branch("-M", "main")
+    # git add .
+    path_git.add(".")
+    # git commit -m "generated from template"
+    path_git.commit("-m", "generated from template")
+    # git push -u origin main
+    path_git.push("--set-upstream", "origin", "main")   
+    # TODO submodules
+
+    return False, ""
+
 def main():
     """
     Main function
@@ -540,20 +631,26 @@ def main():
     args_ok, args = parse_args()
     if not args_ok:
          log_fatal(f"Args incorrect")
+
     path_ok = check_files()
     if not path_ok:
         log_fatal(f"File integrity")
         exit(1)
+
     details_ok, details = get_cve_details()
     if not details_ok:
         log_fatal(f"Could not parse details")
         exit(1)
-    assert details is not None, "Details None even though parsing succeded"
+    assert details is not None, "Details is None, even though parsing succeded"
+
     success, path = construct_template(details)
     if not success:
         log_fatal(f"Could not create generate files")
         return
     log_info(f"Success! Saved under {path}")
+    assert path is not None, "Path is None, even though constructing succeded"
+
+    git_ok, url = setup_git(path)
     
 
 if __name__ == "__main__":
