@@ -537,11 +537,26 @@ def write_script(new_script_path: Path, details: CVEDetails) -> bool:
     return True
 
 def test_key(key: str) -> bool:
+    """
+    Tests a github api key
+
+    Arguments:
+        key(str): The api key
+
+    Returns:
+        true: True if the key works, False otheriwse
+    """
     headers = {"Authorization": f"token {key}"}
     resp = requests.get("https://api.github.com", headers=headers)
     return resp.status_code == 200
 
 def load_github_apikey() -> tuple[bool, str]:
+    """
+    Loads the github api from the file GITHUB_API_KEY_PATH
+
+    Returns:
+        bool, str: True if the github api key has been loaded and the key
+    """
     if not GITHUB_API_KEY_PATH.exists():
         log_debug(f"No github api key provided in {GITHUB_API_KEY_PATH}, not initializing repo")
         return False, ""
@@ -553,6 +568,16 @@ def load_github_apikey() -> tuple[bool, str]:
     return True, key
 
 def create_github_repo(key: str, identifier: str) -> dict:
+    """
+    Creates a remote private github repo
+
+    Arguments:
+        key(str): The key for the github api
+        identifier(str): The identifier of the CVE used as the name
+
+    Returns:
+        dict: The json response
+    """
     headers = {"Authorization": f"token {key}"}
     data = {
         "name": identifier,
@@ -585,6 +610,15 @@ def create_github_repo(key: str, identifier: str) -> dict:
     return resp_json
 
 def setup_git(path: Path) -> tuple[bool, str]:
+    """
+    Sets up a local git repo and pushes the generated local files to a private github repo
+
+    Arguments:
+        path(Path): The path to the locally generated files.
+
+    Returns:
+        bool, str: True if successful and the url to the github repo
+    """
     # Load and check the github api key
     key_ok, key = load_github_apikey()
     if not key_ok:
@@ -599,6 +633,7 @@ def setup_git(path: Path) -> tuple[bool, str]:
     git_path = path / ".git"
     git_path.mkdir()
 
+    original_path = os.getcwd()
     os.chdir(path)
 
     # Init the git repo
@@ -607,21 +642,27 @@ def setup_git(path: Path) -> tuple[bool, str]:
 
     # Create a new github repo
     resp_json = create_github_repo(key, path.name)
+    github_url = resp_json["ssh_url"]
 
     # Add all the files and push
     # git remote add origin git@github.com:cc3305/CVE-XXXX-yyyy.git
-    path_git.remote.add("origin", resp_json["ssh_url"])
+    path_git.remote.add("origin", github_url)
     # git branch -M main
     path_git.branch("-M", "main")
     # git add .
     path_git.add(".")
     # git commit -m "generated from template"
     path_git.commit("-m", "generated from template")
-    # git push -u origin main
+    # git push --set-upstream origin main
     path_git.push("--set-upstream", "origin", "main")   
-    # TODO submodules
-
-    return False, ""
+    log_debug("Added files to git repo")
+    # Go back to main directory
+    os.chdir(original_path)
+    main_git = git.bake()
+    # git submodule add -b main --depth 1 repo_url path
+    main_git.submodule.add("-b", "main", "--depth", "1", github_url, path)
+    log_debug("Pushed files to github")
+    return True, github_url
 
 def main():
     """
@@ -651,7 +692,10 @@ def main():
     assert path is not None, "Path is None, even though constructing succeded"
 
     git_ok, url = setup_git(path)
-    
+    if not git_ok:
+        log_fatal("Could not create git repo")
+        return
+    log_info(f"Created local gitrepo and pushed files to {url}") 
 
 if __name__ == "__main__":
     main()
