@@ -39,5 +39,5 @@
 	branch = main
 [submodule "2023/CVE-2023-6553"]
 	path = 2023/CVE-2023-6553
-	url = git@github.com:cc3305/CVE-2023-6553.git
+	url = https://github.com/cc3305/CVE-2023-6553
 	branch = main
