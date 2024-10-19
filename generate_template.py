@@ -111,6 +111,7 @@ def parse_args() -> tuple[bool, argparse.Namespace]:
     Returns:                                                                                                                    
         bool, argparse.Namespace: True if success, False otherwise and the parsed args
     """
+    log_debug("Parsing args")
     parser = argparse.ArgumentParser(description="CVE exploit script template generator by cc3305")
     parser.add_argument("IDENTIFIER", action="store", help="CVE Number in the format CVE-XXXX-yyyy")
     result = parser.parse_args()
@@ -161,8 +162,9 @@ def check_files() -> bool:
     paths = [TEMPLATE_PATH, TEMPLATE_SCRIPT, TEMPLATE_README, TEMPLATE_REQUIREMENTS]
     for path in paths:
         if not path.exists():
-            log_error(f"File {path} does not exist")
+            log_error(f"File '{path}' does not exist")
             return False
+        log_debug(f"'{path}' exists")
     return True
 
 def parse_versions(soup) -> list[VersionRange]:
@@ -357,20 +359,22 @@ def get_cve_details() -> tuple[bool, CVEDetails | None]:
     Returns:
         tuple[bool, CVEDetails]: True if everything went ok and the parsed CVEDetails
     """
+    log_debug("Getting cve details")
     # These should not be None, but just make sure (and make the linter shut up)
     assert args is not None, "Args are None while parsing cve details"
-    assert args.IDENTIFIER is not None, "CVE Identifier is None while parsing cve details"
+    assert args.IDENTIFIER is not None, "CVE identifier is None while parsing cve details"
 
     # Need user agent so we dont get blocked by cf
     headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0"}
     url = f"https://www.cvedetails.com/cve/{args.IDENTIFIER}/"
     resp = requests.get(url, headers=headers)
+
     # 429 means blocked by cf
     if resp.status_code == 429:
-        log_error(f"Could not parse cve details, blocked")
+        log_error(f"Could not parse cve details, rate limited by cloudflare :(")
         return False, None
     if resp.status_code != 200:
-        log_error(f"Could not parse cve details, cant reach website?")
+        log_error(f"Could not parse cve details, failed with error code {resp.status_code}")
         return False, None
 
     return parse_cve_details(resp)
@@ -385,6 +389,7 @@ def parse_cve_details(response: requests.Response) -> tuple[bool, CVEDetails | N
     Returns:
         tuple[bool, CVEDetails]: True if everything was successful and the CVEDetails
     """
+    log_debug("Parsing cve details")
     soup = BeautifulSoup(response.text, "html.parser")
 
     error = parse_error_message(soup)
@@ -432,6 +437,7 @@ def construct_template(details: CVEDetails) -> tuple[bool, Path | None]:
     Returns:
         tuple[bool, Path]: True if everything went ok and the Path to the folder
     """
+    log_debug("Writing all the files")
     year = parse_year(details.identifier)
     if year == "":
         return False, None
@@ -476,6 +482,7 @@ def references_to_string(details: CVEDetails) -> str | None:
     """
     formatted_string = ""
     formatted_string += f"- [CVE-details - CVSS Score {details.highest_score()}](https://www.cvedetails.com/cve/{details.identifier})"
+    # TODO
     for reference in details.references:
         pass
     return formatted_string if formatted_string != "" else None
@@ -619,15 +626,7 @@ def setup_git(path: Path) -> tuple[bool, str]:
     Returns:
         bool, str: True if successful and the url to the github repo
     """
-    # Load and check the github api key
-    key_ok, key = load_github_apikey()
-    if not key_ok:
-        return False, ""
-
-    key_valid = test_key(key)
-    if not key_valid:
-        log_fatal("Github api key is invalid.")
-        return False, ""
+    log_debug("Setting up git repo")
 
     # Create a git repo locally
     git_path = path / ".git"
@@ -639,6 +638,17 @@ def setup_git(path: Path) -> tuple[bool, str]:
     # Init the git repo
     path_git = git.bake()
     path_git.init()
+
+    # Load and check the github api key
+    key_ok, key = load_github_apikey()
+    if not key_ok:
+        log_info("No github api key provided, but local repo was created")
+        return False, ""
+
+    key_valid = test_key(key)
+    if not key_valid:
+        log_fatal("Github api key is invalid, but local repo was created")
+        return False, ""
 
     # Create a new github repo
     resp_json = create_github_repo(key, path.name)
@@ -671,11 +681,12 @@ def main():
     global args
     args_ok, args = parse_args()
     if not args_ok:
-         log_fatal(f"Args incorrect")
+        log_fatal(f"Args provided are incorrect")
+        exit(1)
 
     path_ok = check_files()
     if not path_ok:
-        log_fatal(f"File integrity")
+        log_fatal(f"File integrity checks failed")
         exit(1)
 
     details_ok, details = get_cve_details()
@@ -688,14 +699,13 @@ def main():
     if not success:
         log_fatal(f"Could not create generate files")
         return
-    log_info(f"Success! Saved under {path}")
+    log_info(f"Success! Saved under '{path}'")
     assert path is not None, "Path is None, even though constructing succeded"
 
     git_ok, url = setup_git(path)
     if not git_ok:
-        log_fatal("Could not create git repo")
         return
-    log_info(f"Created local gitrepo and pushed files to {url}") 
+    log_info(f"Created local gitrepo and pushed files to '{url}'") 
 
 if __name__ == "__main__":
     main()
