@@ -9,6 +9,8 @@ from bs4 import BeautifulSoup
 from sh import git
 import os
 
+debug = False
+
 args = None
 
 TEMPLATE_PATH = Path("./_template_script/")
@@ -93,6 +95,8 @@ def log_debug(msg: str):
     Arguments:
         msg(str): The message to log
     """
+    if not debug:
+        return
     print(f"[~] {msg}")
 
 def log_fatal(msg: str):
@@ -627,6 +631,9 @@ def setup_git(path: Path) -> tuple[bool, str]:
         bool, str: True if successful and the url to the github repo
     """
     log_debug("Setting up git repo")
+    # Try to load the key here, because after we change working directory
+    # Even if it fails, still create the local repo
+    key_ok, key = load_github_apikey()
 
     # Create a git repo locally
     git_path = path / ".git"
@@ -640,7 +647,6 @@ def setup_git(path: Path) -> tuple[bool, str]:
     path_git.init()
 
     # Load and check the github api key
-    key_ok, key = load_github_apikey()
     if not key_ok:
         log_info("No github api key provided, but local repo was created")
         return False, ""
