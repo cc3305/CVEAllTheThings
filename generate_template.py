@@ -5,9 +5,9 @@ from typing import Optional
 import requests
 import re
 from dataclasses import dataclass
-from bs4 import BeautifulSoup
 from sh import git
 import os
+from urllib.parse import urlparse
 
 debug = False
 
@@ -19,9 +19,11 @@ TEMPLATE_README = TEMPLATE_PATH / "README.md"
 TEMPLATE_REQUIREMENTS = TEMPLATE_PATH / "requirements.txt"
 
 GITHUB_API_KEY_PATH = Path("../github_api_key.txt")
+NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+CVELIST_RAW_URL = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves"
+REQUEST_TIMEOUT = 20
 
 _RE_COMBINE_WHITESPACE = re.compile(r"\s+")
-_RE_VERSION_MATCHER = re.compile(r".* \((>=|<=|=<|>|=|<)\) (\S+) .* \((>=|<=|=<|>|=|<)\) (\S+)")
 
 
 @dataclass
@@ -119,7 +121,7 @@ def parse_args() -> tuple[bool, argparse.Namespace]:
     parser = argparse.ArgumentParser(description="CVE exploit script template generator by cc3305")
     parser.add_argument("IDENTIFIER", action="store", help="CVE Number in the format CVE-XXXX-yyyy")
     result = parser.parse_args()
-    if not is_valid_cve_identifier:
+    if not is_valid_cve_identifier(result.IDENTIFIER):
         log_error(f"{result.IDENTIFIER} is not a valid CVE Number")
         return False, result
     return True, result
@@ -137,25 +139,6 @@ def is_valid_cve_identifier(ident: str):
     cve_pattern = r"CVE-\d{4}-\d{4,}"
     return not re.fullmatch(cve_pattern, ident) is None
 
-# https://stackoverflow.com/questions/736043/checking-if-a-string-can-be-converted-to-float-in-python
-def is_float(element: any) -> bool:
-    """
-    Check if something is a float
-    Arguments:
-        element(any): The element to check
-    Returns:
-        bool: True if the element is a float, false otherwhise
-    """
-    # If you expect None to be passed:
-    if element is None: 
-        return False
-    try:
-        float(element)
-        return True
-    except ValueError:
-        return False
-
-
 def check_files() -> bool:
     """
     Checks the file integrity
@@ -171,246 +154,214 @@ def check_files() -> bool:
         log_debug(f"'{path}' exists")
     return True
 
-def parse_versions(soup) -> list[VersionRange]:
+def version_entry_to_range(product_name: str, version_entry: dict) -> VersionRange | None:
     """
-    Parse the affected versions by the CVE
+    Convert a CVE List affected version entry into a VersionRange
 
     Arguments:
-        soup: The soup of the cvedetails page
+        product_name(str): The affected product name
+        version_entry(dict): A version entry from the CVE List record
 
     Returns:
-        list[VersionRange]: The list of version ranges
+        VersionRange: The parsed version range or None if the version is not affected
+    """
+    if version_entry.get("status") != "affected":
+        return None
+
+    min_version = version_entry.get("version")
+    max_version = version_entry.get("lessThanOrEqual") or version_entry.get("lessThan") or min_version
+    max_including = "lessThanOrEqual" in version_entry or "lessThan" not in version_entry
+
+    if min_version is None and max_version is None:
+        return VersionRange(product_name, "", False, "", False, [], False)
+    if min_version == max_version and max_including:
+        return VersionRange(product_name, max_version, True, min_version, True, [], True)
+    return VersionRange(product_name, max_version, max_including, min_version, True, [])
+
+def parse_cvelist_affected(record: dict) -> list[VersionRange]:
+    """
+    Parse affected versions from a CVE List V5 record
+
+    Arguments:
+        record(dict): The CVE List record
+
+    Returns:
+        list[VersionRange]: The affected version ranges
     """
     affected_versions = []
-    affected_version_element = soup.find("ul", {"id": "affectedCPEsList"})
-    if affected_version_element is None:
-        log_debug(f"Could not parse affected versions")
-    else:
-        all_lis = affected_version_element.findAll("li")
-        for li in all_lis:
-            product_name_element = li.find("div")
-            product_name_parts = product_name_element.text.split("Version")
-            # This is pretty bad but oh well
-            product_name = product_name_parts[0]
-            # Normalize the product name
-            product_name = product_name.replace("»", "")
-            product_name = _RE_COMBINE_WHITESPACE.sub(" ", product_name).strip()
+    cna_container = record.get("containers", {}).get("cna", {})
+    for affected_product in cna_container.get("affected", []):
+        product_name = affected_product.get("product") or affected_product.get("vendor") or ""
+        product_name = _RE_COMBINE_WHITESPACE.sub(" ", product_name).strip()
+        if product_name == "":
+            log_debug(f"Skipping affected product without a name")
+            continue
 
-            if len(product_name_parts) < 2:
-                log_debug(f"No version for {product_name}")
-                affected_versions.append(VersionRange(product_name, "", False, "", False, [], False))
-                continue
+        versions = affected_product.get("versions", [])
+        if len(versions) < 1:
+            affected_versions.append(VersionRange(product_name, "", False, "", False, [], False))
+            continue
 
-            # If there is only one version listed we need to split by "Version" if there are multiple its "Versions"
-            product_version = product_name_parts[1]
-            if "Versions" in product_name_element.text:
-                product_version = product_name_element.text.split("Versions")[1]
-            else:
-                # Single version, string looks like this ": VERSION"
-                version = product_version[2:]
-                affected_versions.append(VersionRange(product_name, version, True, version, True, [], True))
+        for version_entry in versions:
+            version_range = version_entry_to_range(product_name, version_entry)
+            if version_range is None:
                 continue
-            # Version looks like this "from including (>=) 7.16.0 and  before (<) 7.16.4"
-            # Dont really care about the text so just keep everything in () and the version numbers
-            product_version = product_version.strip()
-            version_matches = _RE_VERSION_MATCHER.match(product_version)
-            if version_matches is None:
-                log_debug(f"Could not parse version {product_name} {product_version}")
-                continue
-            if len(version_matches.groups()) < 4:
-                log_debug(f"Could not find all version parts for {product_name} {product_version}")
-                continue
-            # Find out which version is the min and max and which of them are inclusive
-            operator_one = version_matches.groups()[0]
-            version_one = version_matches.groups()[1]
-            operator_two = version_matches.groups()[2]
-            version_two = version_matches.groups()[3]
-            min = max = ""
-            min_inclusive = max_inclusive = False
-            for operator, version in zip([operator_one, operator_two], [version_one, version_two]):
-                if ">" in operator:
-                    min = version
-                    min_inclusive = "=" in operator
-                if "<" in operator:
-                    max = version
-                    max_inclusive = "=" in operator
-
-            vr = VersionRange(product_name, max, max_inclusive, min, min_inclusive, [])
-            affected_versions.append(vr)
+            affected_versions.append(version_range)
     return affected_versions
 
-def parse_scores(soup) -> list[float]:
+def parse_nvd_scores(cve_data: dict) -> list[float]:
     """
-    Parse the CVE scores
+    Parse CVSS scores from a NVD CVE object
 
     Arguments:
-        soup: The soup of the cvedetails page
+        cve_data(dict): The NVD CVE object
 
     Returns:
-        list[float]: A list of floats that represents the scores
+        list[float]: The parsed CVSS scores
     """
-    # Parse the scores
-    score_table_element = soup.find("table", {"class": "table table-borderless"})
     scores = []
-    if score_table_element is None:
-        log_debug("Could not parse scores from cve details")
-    else:
-        all_trs = score_table_element.find_all("tr")
-        visible_trs = [tr for tr in all_trs if tr.get("id") is None]
-        for tr in visible_trs:
-            tds = tr.find_all("td")
-            if len(tds) < 7:
+    for metrics in cve_data.get("metrics", {}).values():
+        for metric in metrics:
+            score = metric.get("cvssData", {}).get("baseScore")
+            if score is None:
                 continue
-            score = tds[0].text
-            if is_float(score):
-                scores.append(float(score))
-            else:
-                log_debug(f"Could not parse score '{score}' to float")
-
+            scores.append(float(score))
     return scores
 
-def parse_references(soup) -> list:
+def parse_nvd_summary(cve_data: dict) -> str:
     """
-    Parse the CVE references
+    Parse the english summary from a NVD CVE object
 
     Arguments:
-        soup: The soup of the cvedetails page
-
-    Returns:
-        list: List of references
-    """
-    cve_cards_elements = soup.findAll("div", {"class": "cved-card"})
-    references_cve_card_element = None
-    for cve_card in cve_cards_elements:
-        card_h2 = cve_card.findChild("h2")
-        if card_h2 is not None and "References" in card_h2.text:
-            references_cve_card_element = cve_card
-            break
-
-    links = []
-    all_lis = references_cve_card_element.find_all("li", {"class": "list-group-item border-0 border-top list-group-item-action"})
-    for li in all_lis:
-        link = li.find("a")
-        if link is None:
-            log_debug(f"Could not find link for li {li}")
-            continue
-        links.append(link.get("href")) 
-    return links
-
-def parse_summary(soup) -> str:
-    """
-    Parse the CVE summary
-
-    Arguments:
-        soup: The soup of the cvedetails page
+        cve_data(dict): The NVD CVE object
 
     Returns:
         str: The summary or "" if there is none
     """
-    # Try parse the summary
-    summary = soup.find("div", {"id": "cvedetailssummary"})
-    if summary is None:
-        log_debug("Could not parse summary from cve details")
-        return ""
-    return summary.text
-
-def parse_ident(soup) -> str:
-    """
-    Parse the CVE-XXXX-yyyy identifier
-
-    Arguments:
-        soup: The soup of the cvedetails page
-
-    Returns:
-        str: The identifier or "" if none was found
-    """
-    # Check if the CVE identifier can be found on the page
-    identifier_element = soup.find("div", {"id": "cvedetails-title-div"})
-    if identifier_element is None:
-        log_error("Could not parse title on cve details")
-        return ""
-    identifier = identifier_element.findChild("a")
-    if identifier is None:
-        log_error("Could not parse identifier of cve on cve details")
-        return ""
-    return identifier.text
-
-def parse_error_message(soup) -> str:
-    """
-    Parses a error message that can occurr on the cvedetails page
-
-    Arguments:
-        soup: BS4 Soup
-
-    Returns:
-        str: The error or "" if there is none
-    """
-    # Check if the cve exists, if not there is a element with the class "alert alert-secondary my-4" which has the error message
-    potential_error_message_container = soup.find("div", {"class": "alert alert-secondary my-4"})
-    if potential_error_message_container is not None:
-        # Error message is the first bold text
-        potential_error_message = potential_error_message_container.findChild("b", recursive=False)
-        error = "Unkown"
-        if potential_error_message is not None:
-            error = potential_error_message.text
-        return error
+    for description in cve_data.get("descriptions", []):
+        if description.get("lang") == "en":
+            value = description.get("value")
+            if value is None:
+                return ""
+            return value
     return ""
+
+def parse_nvd_references(cve_data: dict) -> list[str]:
+    """
+    Parse references from a NVD CVE object
+
+    Arguments:
+        cve_data(dict): The NVD CVE object
+
+    Returns:
+        list[str]: The parsed reference URLs
+    """
+    references = []
+    for reference in cve_data.get("references", []):
+        url = reference.get("url")
+        if url is None:
+            continue
+        references.append(url)
+    return references
+
+def cvelist_url(identifier: str) -> str:
+    """
+    Build the CVE List V5 raw GitHub URL for an identifier
+
+    Arguments:
+        identifier(str): The CVE identifier
+
+    Returns:
+        str: The raw CVE List V5 URL
+    """
+    year = parse_year(identifier)
+    cve_number = int(identifier.split("-")[2])
+    cve_bucket = cve_number // 1000
+    return f"{CVELIST_RAW_URL}/{year}/{cve_bucket}xxx/{identifier}.json"
+
+def get_nvd_details(identifier: str) -> tuple[bool, dict | None]:
+    """
+    Get CVE details from the NVD API
+
+    Arguments:
+        identifier(str): The CVE identifier
+
+    Returns:
+        tuple[bool, dict]: True if the NVD details were fetched successfully and the CVE object
+    """
+    log_debug("Getting NVD details")
+    try:
+        resp = requests.get(NVD_API_URL, params={"cveId": identifier}, timeout=REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as e:
+        log_error(f"Could not fetch NVD details: {e}")
+        return False, None
+
+    if resp.status_code != 200:
+        log_error(f"Could not fetch NVD details, failed with error code {resp.status_code}")
+        return False, None
+
+    data = resp.json()
+    vulnerabilities = data.get("vulnerabilities", [])
+    if len(vulnerabilities) != 1:
+        log_error(f"NVD returned {len(vulnerabilities)} results for {identifier}")
+        return False, None
+    return True, vulnerabilities[0].get("cve", {})
+
+def get_cvelist_details(identifier: str) -> tuple[bool, dict | None]:
+    """
+    Get CVE details from CVEProject/cvelistV5
+
+    Arguments:
+        identifier(str): The CVE identifier
+
+    Returns:
+        tuple[bool, dict]: True if the CVE List record was fetched successfully and the record
+    """
+    log_debug("Getting CVE List details")
+    url = cvelist_url(identifier)
+    try:
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as e:
+        log_error(f"Could not fetch CVE List details: {e}")
+        return False, None
+
+    if resp.status_code != 200:
+        log_error(f"Could not fetch CVE List details, failed with error code {resp.status_code}")
+        return False, None
+
+    return True, resp.json()
 
 
 def get_cve_details() -> tuple[bool, CVEDetails | None]:
     """
-    Parses CVE Details from https://cvedetails.com/
+    Parses CVE details from the NVD API and affected versions from CVE List V5
+
     Returns:
         tuple[bool, CVEDetails]: True if everything went ok and the parsed CVEDetails
     """
-    log_debug("Getting cve details")
+    log_debug("Getting CVE details")
     # These should not be None, but just make sure (and make the linter shut up)
-    assert args is not None, "Args are None while parsing cve details"
-    assert args.IDENTIFIER is not None, "CVE identifier is None while parsing cve details"
+    assert args is not None, "Args are None while parsing CVE details"
+    assert args.IDENTIFIER is not None, "CVE identifier is None while parsing CVE details"
 
-    # Need user agent so we dont get blocked by cf
-    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0"}
-    url = f"https://www.cvedetails.com/cve/{args.IDENTIFIER}/"
-    resp = requests.get(url, headers=headers)
-
-    # 429 means blocked by cf
-    if resp.status_code == 429:
-        log_error(f"Could not parse cve details, rate limited by cloudflare :(")
-        return False, None
-    if resp.status_code != 200:
-        log_error(f"Could not parse cve details, failed with error code {resp.status_code}")
+    nvd_ok, nvd_cve = get_nvd_details(args.IDENTIFIER)
+    if not nvd_ok:
         return False, None
 
-    return parse_cve_details(resp)
-
-def parse_cve_details(response: requests.Response) -> tuple[bool, CVEDetails | None]:
-    """
-    Parse all the cve details from https://cvedetails.com
-
-    Arguments:
-        response(requests.Response): The response of the request to https://cvedetails.com
-
-    Returns:
-        tuple[bool, CVEDetails]: True if everything was successful and the CVEDetails
-    """
-    log_debug("Parsing cve details")
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    error = parse_error_message(soup)
-    if error != "":
-        log_error(f"Could not parse cve details: {error}")
+    cvelist_ok, cvelist_record = get_cvelist_details(args.IDENTIFIER)
+    if not cvelist_ok:
         return False, None
 
-    identifier = parse_ident(soup)
-    if identifier == "":
+    if nvd_cve is None or cvelist_record is None:
+        log_error(f"Could not parse CVE details")
         return False, None
 
-    details = CVEDetails(identifier, None, [], [], [])
+    details = CVEDetails(args.IDENTIFIER, None, [], [], [])
 
-    details.summary = parse_summary(soup)
-    details.references = parse_references(soup) 
-    details.scores = parse_scores(soup)
-    details.affected_version = parse_versions(soup)
+    details.summary = parse_nvd_summary(nvd_cve)
+    details.references = parse_nvd_references(nvd_cve)
+    details.scores = parse_nvd_scores(nvd_cve)
+    details.affected_version = parse_cvelist_affected(cvelist_record)
 
     return True, details
 
@@ -484,12 +435,15 @@ def references_to_string(details: CVEDetails) -> str | None:
     Returns:
         str: The references as a string
     """
-    formatted_string = ""
-    formatted_string += f"- [CVE-details - CVSS Score {details.highest_score()}](https://www.cvedetails.com/cve/{details.identifier})"
-    # TODO
+    references = [f"- [NVD - CVSS Score {details.highest_score()}](https://nvd.nist.gov/vuln/detail/{details.identifier})"]
+    seen_references = set()
     for reference in details.references:
-        pass
-    return formatted_string if formatted_string != "" else None
+        if reference in seen_references:
+            continue
+        seen_references.add(reference)
+        domain = urlparse(reference).netloc or reference
+        references.append(f"- [Reference - {domain}]({reference})")
+    return "\n".join(references) if len(references) > 0 else None
 
 def write_readme(new_readme_path: Path, details: CVEDetails) -> bool:
     """
