@@ -18,10 +18,10 @@ TEMPLATE_SCRIPT = TEMPLATE_PATH / "CVE-XXXX-yyyy.py"
 TEMPLATE_README = TEMPLATE_PATH / "README.md"
 TEMPLATE_REQUIREMENTS = TEMPLATE_PATH / "requirements.txt"
 
-GITHUB_API_KEY_PATH = Path("../github_api_key.txt")
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 CVELIST_RAW_URL = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves"
 REQUEST_TIMEOUT = 20
+GITHUB_API_TOKEN_ENV = "GITHUB_API_TOKEN"
 
 _RE_COMBINE_WHITESPACE = re.compile(r"\s+")
 
@@ -120,6 +120,7 @@ def parse_args() -> tuple[bool, argparse.Namespace]:
     log_debug("Parsing args")
     parser = argparse.ArgumentParser(description="CVE exploit script template generator by cc3305")
     parser.add_argument("IDENTIFIER", action="store", help="CVE Number in the format CVE-XXXX-yyyy")
+    parser.add_argument("--create-remote-repo", action="store_true", help="Create a private GitHub repo using GITHUB_API_TOKEN and push the generated files")
     result = parser.parse_args()
     if not is_valid_cve_identifier(result.IDENTIFIER):
         log_error(f"{result.IDENTIFIER} is not a valid CVE Number")
@@ -501,49 +502,50 @@ def write_script(new_script_path: Path, details: CVEDetails) -> bool:
     new_script_path.write_text(content)
     return True
 
-def test_key(key: str) -> bool:
+def test_key(token: str) -> bool:
     """
-    Tests a github api key
+    Tests a github api token
 
     Arguments:
-        key(str): The api key
+        token(str): The api token
 
     Returns:
         true: True if the key works, False otheriwse
     """
-    headers = {"Authorization": f"token {key}"}
+    headers = {"Authorization": f"token {token}"}
     resp = requests.get("https://api.github.com", headers=headers)
     return resp.status_code == 200
 
-def load_github_apikey() -> tuple[bool, str]:
+def load_github_api_token() -> tuple[bool, str]:
     """
-    Loads the github api from the file GITHUB_API_KEY_PATH
+    Loads the github api token from the environment
 
     Returns:
-        bool, str: True if the github api key has been loaded and the key
+        bool, str: True if the github api token has been loaded and the token
     """
-    if not GITHUB_API_KEY_PATH.exists():
-        log_debug(f"No github api key provided in {GITHUB_API_KEY_PATH}, not initializing repo")
+    token = os.environ.get(GITHUB_API_TOKEN_ENV)
+    if token is None:
+        log_error(f"{GITHUB_API_TOKEN_ENV} is not set")
         return False, ""
-    key = GITHUB_API_KEY_PATH.read_text().strip()
-    if key == "":
-        log_debug(f"Invalid github api key in file {GITHUB_API_KEY_PATH}, not initializing repo")
+    token = token.strip()
+    if token == "":
+        log_error(f"{GITHUB_API_TOKEN_ENV} is empty")
         return False, ""
 
-    return True, key
+    return True, token
 
-def create_github_repo(key: str, identifier: str) -> dict:
+def create_github_repo(token: str, identifier: str) -> dict:
     """
     Creates a remote private github repo
 
     Arguments:
-        key(str): The key for the github api
+        token(str): The token for the github api
         identifier(str): The identifier of the CVE used as the name
 
     Returns:
         dict: The json response
     """
-    headers = {"Authorization": f"token {key}"}
+    headers = {"Authorization": f"token {token}"}
     data = {
         "name": identifier,
         "private": True,
@@ -585,10 +587,6 @@ def setup_git(path: Path) -> tuple[bool, str]:
         bool, str: True if successful and the url to the github repo
     """
     log_debug("Setting up git repo")
-    # Try to load the key here, because after we change working directory
-    # Even if it fails, still create the local repo
-    key_ok, key = load_github_apikey()
-
     # Create a git repo locally
     git_path = path / ".git"
     git_path.mkdir()
@@ -600,18 +598,23 @@ def setup_git(path: Path) -> tuple[bool, str]:
     path_git = git.bake()
     path_git.init()
 
-    # Load and check the github api key
-    if not key_ok:
-        log_info("No github api key provided, but local repo was created")
+    if not args.create_remote_repo:
+        log_info("Remote repo creation skipped, but local repo was created")
         return False, ""
 
-    key_valid = test_key(key)
-    if not key_valid:
-        log_fatal("Github api key is invalid, but local repo was created")
+    # Load and check the github api token only if remote creation was requested
+    token_ok, token = load_github_api_token()
+    if not token_ok:
+        log_fatal("Github api token could not be loaded, but local repo was created")
+        return False, ""
+
+    token_valid = test_key(token)
+    if not token_valid:
+        log_fatal("Github api token is invalid, but local repo was created")
         return False, ""
 
     # Create a new github repo
-    resp_json = create_github_repo(key, path.name)
+    resp_json = create_github_repo(token, path.name)
     github_url = resp_json["ssh_url"]
 
     # Add all the files and push
