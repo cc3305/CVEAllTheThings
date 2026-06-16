@@ -55,3 +55,8 @@
 	url = https://github.com/cc3305/CVE-2025-49844
 	branch = main
 	ignore = dirty
+[submodule "2025/CVE-2025-30208"]
+	path = 2025/CVE-2025-30208
+	url = https://github.com/cc3305/CVE-2025-30208
+	branch = main
+	ignore = dirty
